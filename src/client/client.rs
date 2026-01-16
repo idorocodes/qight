@@ -5,8 +5,9 @@ use rustls::pki_types::CertificateDer;
 use rustls::{ClientConfig as RustlsClientConfig, RootCertStore};
 use std::fs::read;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::result::Result::Ok;
+use std::sync::Arc;
+use std::usize;
 
 use crate::MessageEnvelope;
 
@@ -78,15 +79,13 @@ impl RelayClient {
             .context("failed to open bidirectional stream")?;
 
         let bytes = envelope.to_bytes()?;
-        println!("Bytes converted");
+
         send.write_all(b"SEND").await?;
         send.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
         send.write_all(&bytes).await?;
 
         send.finish()?;
 
-        println!("Bytes sent");
-        println!("{:?}",bytes);
         Ok(())
     }
 
@@ -96,42 +95,48 @@ impl RelayClient {
             .open_bi()
             .await
             .context("open bi for fetch")?;
-    
-        let req = format!("FETCH\n{}", recipient);
+
+        let req = format!("FETCH {}\n", recipient.trim());
         send.write_all(req.as_bytes()).await?;
         send.finish()?;
-    
+
         let mut messages = Vec::new();
-    
+
         loop {
             let mut len_bytes = [0u8; 4];
             match recv.read_exact(&mut len_bytes).await {
                 Ok(()) => {
                     let len = u32::from_be_bytes(len_bytes) as usize;
-                    println!("Received length: {}", len);
-    
+
                     if len == 0 {
-                        println!("End of messages");
                         break;
                     }
-    
-                    let mut buf = vec![0u8; len];
-                    recv.read_exact(&mut buf).await
-                        .context("failed to read envelope payload")?;
-    
-                    let env: MessageEnvelope = wincode::deserialize(&buf)
-                        .map_err(|e| anyhow::anyhow!("deserialize failed: {}", e))?;
-    
-                    messages.push(env);
+
+                    if len > 5_000_000 {
+                        anyhow::bail!(
+                            "refusing to read suspiciously large message ({} bytes)",
+                            len
+                        );
+                    }
+
+                    let mut payload = vec![0u8; len];
+                    recv.read_exact(&mut payload)
+                        .await
+                        .context("failed to read message payload")?;
+
+                    let envelope = wincode::deserialize(&payload)
+                        .context("failed to deserialize MessageEnvelope")?;
+
+                    messages.push(envelope);
                 }
-            
-                Err(e) => return Err(e.into()),
+
+                Err(e) => {
+                    return Err(e.into());
+                }
             }
         }
-    
         Ok(messages)
     }
-
     pub async fn close(&self, reason: Option<&str>) {
         let reason_bytes = reason.unwrap_or("done").as_bytes();
         self.connection.close(0u8.into(), reason_bytes);

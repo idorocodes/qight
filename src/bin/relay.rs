@@ -110,46 +110,76 @@ async fn handle_connection(
     }
 
     Ok(())
-}async fn handle_stream(
+}
+
+async fn handle_stream(
     mut send: quinn::SendStream,
     mut recv: quinn::RecvStream,
     storage: Arc<Mutex<HashMap<String, Vec<MessageEnvelope>>>>,
 ) -> Result<()> {
     // Read first 4 bytes
     let mut prefix = [0u8; 4];
-    let n = recv.read(&mut prefix).await.context("read initial 4 bytes")?.unwrap_or(0);
+    let n = recv
+        .read(&mut prefix)
+        .await
+        .context("read initial 4 bytes")?
+        .unwrap_or(0);
 
     if n == 4 && prefix == [b'S', b'E', b'N', b'D'] {
         // It's a SEND command — proceed to read length + payload
         handle_send(&mut recv, &mut send, storage).await?;
     } else {
-        // Otherwise, it's a text command — rewind the buffer and read line
+        // Text command — accumulate until \n
         let mut command_buf = Vec::from(&prefix[0..n]);
 
         loop {
             let mut chunk = [0u8; 512];
             let n_opt = recv.read(&mut chunk).await.context("read text command")?;
+
             if let Some(n) = n_opt {
                 command_buf.extend_from_slice(&chunk[..n]);
-                if let Some(pos) = command_buf.iter().position(|&b| b == b'\n') {
-                    let command_text = String::from_utf8_lossy(&command_buf[..pos]).trim().to_string();
-                    if command_text.starts_with("HELLO\n") {
-                        let client_id = command_text.strip_prefix("HELLO\n").unwrap_or("").to_string();
-                        handle_hello(&client_id, &mut send).await?;
-                    } else if command_text.starts_with("FETCH\n") {
-                        let recipient = command_text.strip_prefix("FETCH\n").unwrap_or("").to_string();
-                        handle_fetch(&recipient, &mut send, storage).await?;
-                    } else {
-                        send.write_all(b"ERROR: Unknown command\n").await?;
-                    }
-                    break;
-                }
             } else {
                 anyhow::bail!("stream closed before command terminator");
             }
+
+            if let Some(pos) = command_buf.iter().position(|&b| b == b'\n') {
+                let line = String::from_utf8_lossy(&command_buf[..pos])
+                    .trim()
+                    .to_string();
+                let parts: Vec<&str> = line.split_whitespace().collect();
+
+                if parts.is_empty() {
+                    send.write_all(b"ERROR: Empty command\n").await?;
+                    break;
+                }
+
+                match parts[0].to_uppercase().as_str() {
+                    "HELLO" => {
+                        let client_id = parts.get(1).unwrap_or(&"").to_string();
+                        handle_hello(&client_id, &mut send).await?;
+                    }
+                    "FETCH" => {
+                        let recipient = parts.get(1).unwrap_or(&"").to_string();
+                        handle_fetch(&recipient, &mut send, storage).await?;
+                    }
+                    _ => {
+                        send.write_all(b"ERROR: Unknown command\n").await?;
+                    }
+                }
+
+                // Drain anything after the \n (safety)
+                if pos + 1 < command_buf.len() {
+                    // leftover garbage — log & ignore
+                    println!(
+                        "Warning: extra bytes after command: {:?}",
+                        &command_buf[pos + 1..]
+                    );
+                }
+
+                break;
+            }
         }
     }
-
     send.finish().context("failed to finish sending stream")?;
     Ok(())
 }
@@ -194,11 +224,10 @@ async fn handle_send(
             .or_insert_with(Vec::new)
             .push(envelope);
     }
-
+    println!("message stored");
     send.write_all(b"OK\n").await?;
     Ok(())
 }
-
 
 async fn handle_fetch(
     recipient: &str,
@@ -211,7 +240,11 @@ async fn handle_fetch(
         let store = storage.lock().unwrap();
         store.get(recipient).cloned().unwrap_or_default()
     };
-
+    println!(
+        "Sending FETCH response for {}: {} messages",
+        recipient,
+        messages.len()
+    );
     for msg in messages {
         let bytes = msg.to_bytes()?;
         send.write_all(&(bytes.len() as u32).to_be_bytes()).await?;

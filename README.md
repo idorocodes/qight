@@ -1,4 +1,4 @@
-# Qight Crate
+# Qight 
 
 **A Rust implementation of the Qight Protocol: Lightweight, QUIC-based messaging transport for low-latency, bidirectional, event-driven communication.**
 

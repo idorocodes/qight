@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
     // Generate self-signed certificate for local testing
     let subject_alt_names = vec!["localhost".into()];
 
-    let cert_path = "server_path";
+    let cert_path = "server_cert";
     let key_path = "server_key";
 
     let (cert_der, key_der) = if Path::new(cert_path).exists() {

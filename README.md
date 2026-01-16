@@ -1,6 +1,6 @@
 # Qight 
 
-**A Rust implementation of the Qight Protocol: Lightweight, QUIC-based messaging transport for low-latency, bidirectional, event-driven communication.**
+**A Rust powered, lightweight, QUIC-based messaging transport for low-latency, bidirectional, event-driven communication.**
 
 Qight is a minimal transport-layer protocol constructed directly upon QUIC, facilitating the efficient transmission of small, reliable, ephemeral messages. It functions as foundational infrastructure for real-time signaling and event dissemination, serving as a complement to REST APIs by obviating the necessity for HTTP polling, protracted connections, or intricate webhook configurations.
 

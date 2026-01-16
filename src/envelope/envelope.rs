@@ -2,7 +2,7 @@ use crate::errors::QightError;
 use wincode::{SchemaRead, SchemaWrite};
 
 #[repr(C)]
-#[derive(SchemaRead, SchemaWrite, Debug)]
+#[derive(SchemaRead, SchemaWrite, Debug,Clone)]
 pub struct MessageEnvelope {
     pub msg_id: String,
     pub sender: String,

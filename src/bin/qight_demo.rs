@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
     let envelope = qight::MessageEnvelope::new(
         "alice".into(),
         "bob".into(),
-        b"hello via QUIC".to_vec(),
+        b"idorocodes is sending hello via Quic".to_vec(),
         3600,
     );
     client.send(&envelope).await?;

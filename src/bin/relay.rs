@@ -1,40 +1,40 @@
 use anyhow::{Context, Result};
+use qight::MessageEnvelope;
 use quinn::{Endpoint, ServerConfig};
 use quinn_proto::crypto::rustls::QuicServerConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::ServerConfig as RustlsServerConfig;
+use std::collections::HashMap;
+use std::fs::{read, write};
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::fs::{write,read};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 #[tokio::main]
 async fn main() -> Result<()> {
     let addr: SocketAddr = "127.0.0.1:4433".parse()?;
 
     // Generate self-signed certificate for local testing
-    let subject_alt_names = vec!["localhost".into()];
+    let _subject_alt_names: Vec<_> = vec!["localhost"];
 
     let cert_path = "server_cert";
     let key_path = "server_key";
 
     let (cert_der, key_der) = if Path::new(cert_path).exists() {
-    (
-        CertificateDer::from(read(cert_path)?),
-        PrivatePkcs8KeyDer::from(read(key_path)?),
-    )
-} else {
-    let cert_key = generate_simple_self_signed(vec!["localhost".into()])?;
-    let cert = CertificateDer::from(cert_key.cert.der().to_vec());
-    let key = PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der());
+        (
+            CertificateDer::from(read(cert_path)?),
+            PrivatePkcs8KeyDer::from(read(key_path)?),
+        )
+    } else {
+        let cert_key = generate_simple_self_signed(vec!["localhost".into()])?;
+        let cert = CertificateDer::from(cert_key.cert.der().to_vec());
+        let key = PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der());
 
-    write(cert_path, cert.as_ref())?;
-    write(key_path, key.as_ref())?;
+        write(cert_path, cert.as_ref())?;
+        write(key_path, key.secret_pkcs8_der())?;
 
-    (cert, key)
-};
-
+        (cert, key)
+    };
 
     let certs = vec![cert_der];
 
@@ -46,15 +46,16 @@ async fn main() -> Result<()> {
         .with_single_cert(certs, key)
         .context("failed to build rustls server config")?;
 
-    
     rustls_config.alpn_protocols = vec![b"qight".to_vec()];
 
-  
-    println!("Server ALPN protocols configured: {:?}", rustls_config.alpn_protocols);
+    println!(
+        "Server ALPN protocols configured: {:?}",
+        rustls_config.alpn_protocols
+    );
 
     // Create Quinn crypto layer
-    let crypto = QuicServerConfig::try_from(rustls_config)
-        .context("failed to create QUIC crypto config")?;
+    let crypto =
+        QuicServerConfig::try_from(rustls_config).context("failed to create QUIC crypto config")?;
 
     // Build Quinn server config
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
@@ -64,18 +65,24 @@ async fn main() -> Result<()> {
         .expect("transport config should be uniquely owned")
         .max_concurrent_bidi_streams(100u8.into());
 
-    // Create and bind endpoint
-    let endpoint = Endpoint::server(server_config, addr)
-        .context("failed to create QUIC endpoint")?;
+    let storage: Arc<Mutex<HashMap<String, Vec<MessageEnvelope>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    let endpoint =
+        Endpoint::server(server_config, addr).context("failed to create QUIC endpoint")?;
 
     println!("QUIC server listening on {}", addr);
 
     while let Some(connecting) = endpoint.accept().await {
+        let storage_clone = storage.clone();
         tokio::spawn(async move {
             match connecting.await {
                 Ok(connection) => {
-                    println!("New connection established from {}", connection.remote_address());
-                    if let Err(e) = handle_connection(connection).await {
+                    println!(
+                        "New connection established from {}",
+                        connection.remote_address()
+                    );
+                    if let Err(e) = handle_connection(connection, storage_clone).await {
                         eprintln!("Connection handling error: {}", e);
                     }
                 }
@@ -89,46 +96,61 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_connection(connection: quinn::Connection) -> Result<()> {
+async fn handle_connection(
+    connection: quinn::Connection,
+    storage: Arc<Mutex<HashMap<String, Vec<MessageEnvelope>>>>,
+) -> Result<()> {
     while let Ok((send, recv)) = connection.accept_bi().await {
+        let storage = storage.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_stream(send, recv).await {
+            if let Err(e) = handle_stream(send, recv, storage).await {
                 eprintln!("Stream error: {}", e);
             }
         });
     }
 
     Ok(())
-}
-
-async fn handle_stream(
+}async fn handle_stream(
     mut send: quinn::SendStream,
     mut recv: quinn::RecvStream,
+    storage: Arc<Mutex<HashMap<String, Vec<MessageEnvelope>>>>,
 ) -> Result<()> {
-    let mut buf = vec![0u8; 4096];
+    // Read first 4 bytes
+    let mut prefix = [0u8; 4];
+    let n = recv.read(&mut prefix).await.context("read initial 4 bytes")?.unwrap_or(0);
 
-    let n = recv
-        .read(&mut buf)
-        .await
-        .context("failed to read initial data")?
-        .context("stream closed before receiving command")?;
-
-    let command_text = String::from_utf8_lossy(&buf[0..n]).trim().to_string();
-
-    if command_text.starts_with("HELLO\n") {
-        let client_id = command_text.strip_prefix("HELLO\n").unwrap_or("").to_string();
-        handle_hello(&client_id, &mut send).await?;
-    } else if command_text == "SEND" {
-        handle_send(&mut recv, &mut send).await?;
-    } else if command_text.starts_with("FETCH\n") {
-        let recipient = command_text.strip_prefix("FETCH\n").unwrap_or("").to_string();
-        handle_fetch(&recipient, &mut send).await?;
+    if n == 4 && prefix == [b'S', b'E', b'N', b'D'] {
+        // It's a SEND command — proceed to read length + payload
+        handle_send(&mut recv, &mut send, storage).await?;
     } else {
-        send.write_all(b"ERROR: Unknown command\n").await?;
+        // Otherwise, it's a text command — rewind the buffer and read line
+        let mut command_buf = Vec::from(&prefix[0..n]);
+
+        loop {
+            let mut chunk = [0u8; 512];
+            let n_opt = recv.read(&mut chunk).await.context("read text command")?;
+            if let Some(n) = n_opt {
+                command_buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = command_buf.iter().position(|&b| b == b'\n') {
+                    let command_text = String::from_utf8_lossy(&command_buf[..pos]).trim().to_string();
+                    if command_text.starts_with("HELLO\n") {
+                        let client_id = command_text.strip_prefix("HELLO\n").unwrap_or("").to_string();
+                        handle_hello(&client_id, &mut send).await?;
+                    } else if command_text.starts_with("FETCH\n") {
+                        let recipient = command_text.strip_prefix("FETCH\n").unwrap_or("").to_string();
+                        handle_fetch(&recipient, &mut send, storage).await?;
+                    } else {
+                        send.write_all(b"ERROR: Unknown command\n").await?;
+                    }
+                    break;
+                }
+            } else {
+                anyhow::bail!("stream closed before command terminator");
+            }
+        }
     }
 
     send.finish().context("failed to finish sending stream")?;
-
     Ok(())
 }
 
@@ -139,7 +161,11 @@ async fn handle_hello(client_id: &str, send: &mut quinn::SendStream) -> Result<(
     Ok(())
 }
 
-async fn handle_send(recv: &mut quinn::RecvStream, send: &mut quinn::SendStream) -> Result<()> {
+async fn handle_send(
+    recv: &mut quinn::RecvStream,
+    send: &mut quinn::SendStream,
+    storage: Arc<Mutex<HashMap<String, Vec<MessageEnvelope>>>>,
+) -> Result<()> {
     let mut len_bytes = [0u8; 4];
     recv.read_exact(&mut len_bytes)
         .await
@@ -158,27 +184,40 @@ async fn handle_send(recv: &mut quinn::RecvStream, send: &mut quinn::SendStream)
 
     println!("Received SEND payload ({} bytes)", len);
 
+    let envelope: MessageEnvelope =
+        wincode::deserialize(&payload).context("failed to deserialize MessageEnvelope")?;
+    println!("Stored message for recipient: {}", envelope.recipient);
+    {
+        let mut store = storage.lock().unwrap();
+        store
+            .entry(envelope.recipient.clone())
+            .or_insert_with(Vec::new)
+            .push(envelope);
+    }
+
     send.write_all(b"OK\n").await?;
     Ok(())
 }
 
-async fn handle_fetch(recipient: &str, send: &mut quinn::SendStream) -> Result<()> {
+
+async fn handle_fetch(
+    recipient: &str,
+    send: &mut quinn::SendStream,
+    storage: Arc<Mutex<HashMap<String, Vec<MessageEnvelope>>>>,
+) -> Result<()> {
     println!("FETCH request received for recipient: {}", recipient);
 
-    // Currently sending dummy messages – replace with real storage later
-    for i in 1..=2 {
-        let dummy_msg = format!(
-            "msg-{}\nfrom:sender{}\nto:{}\npayload:hello from server",
-            i, i, recipient
-        );
-        let bytes = dummy_msg.as_bytes();
+    let messages = {
+        let store = storage.lock().unwrap();
+        store.get(recipient).cloned().unwrap_or_default()
+    };
 
+    for msg in messages {
+        let bytes = msg.to_bytes()?;
         send.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
-        send.write_all(bytes).await?;
+        send.write_all(&bytes).await?;
     }
 
-    // End marker
     send.write_all(&0u32.to_be_bytes()).await?;
-
     Ok(())
 }

@@ -1,9 +1,12 @@
 use anyhow::{Context, Ok, Result};
 use quinn::{ClientConfig as QuinnClientConfig, Endpoint};
 use quinn_proto::crypto::rustls::QuicClientConfig;
+use rustls::pki_types::{CertificateDer};
 use rustls::{ClientConfig as RustlsClientConfig, RootCertStore};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::fs::read;
+
 
 use crate::errors::QightError;
 use crate::MessageEnvelope;
@@ -17,7 +20,9 @@ impl RelayClient {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
 
         let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let read_cert = read("server_cert")?;
+        roots.add(CertificateDer::from(read_cert))?;
+        
 
         let mut rustls_config = RustlsClientConfig::builder()
             .with_root_certificates(roots)

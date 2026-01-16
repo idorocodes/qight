@@ -6,6 +6,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::ServerConfig as RustlsServerConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::fs::{write,read};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::main]
@@ -14,13 +15,29 @@ async fn main() -> Result<()> {
 
     // Generate self-signed certificate for local testing
     let subject_alt_names = vec!["localhost".into()];
-    let cert_key = generate_simple_self_signed(subject_alt_names)
-        .context("failed to generate self-signed certificate")?;
 
-    let cert_der = CertificateDer::from(cert_key.cert.der().to_vec());
-    let key_der = PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der());
+    let cert_path = "server_path";
+    let key_path = "server_key";
+
+    let (cert_der, key_der) = if Path::new(cert_path).exists() {
+    (
+        CertificateDer::from(read(cert_path)?),
+        PrivatePkcs8KeyDer::from(read(key_path)?),
+    )
+} else {
+    let cert_key = generate_simple_self_signed(vec!["localhost".into()])?;
+    let cert = CertificateDer::from(cert_key.cert.der().to_vec());
+    let key = PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der());
+
+    write(cert_path, cert.as_ref())?;
+    write(key_path, key.as_ref())?;
+
+    (cert, key)
+};
+
 
     let certs = vec![cert_der];
+
     let key = PrivateKeyDer::from(key_der);
 
     // Build rustls server configuration
@@ -29,10 +46,10 @@ async fn main() -> Result<()> {
         .with_single_cert(certs, key)
         .context("failed to build rustls server config")?;
 
-    // Set ALPN protocol – this must match the client exactly
+    
     rustls_config.alpn_protocols = vec![b"qight".to_vec()];
 
-    // Debug confirmation
+  
     println!("Server ALPN protocols configured: {:?}", rustls_config.alpn_protocols);
 
     // Create Quinn crypto layer

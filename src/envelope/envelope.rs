@@ -52,7 +52,7 @@ impl MessageEnvelope {
         }
     }
 
-    pub fn display(&self) -> &MessageEnvelope {
-        self
+    pub fn display(&self) -> &MessageEnvelope{
+        return self
     }
 }

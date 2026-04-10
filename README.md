@@ -1,127 +1,151 @@
-# Qight — Lightweight QUIC-based Messaging Transport (WIP)
+# qight
 
-**A Rust powered, lightweight, QUIC-based messaging transport library for low-latency, bidirectional, event-driven communication.**
+**Offline-first local messaging over QUIC. No internet. No configuration. Guaranteed delivery.**
 
-Qight is a minimal transport-layer protocol constructed directly upon QUIC, facilitating the efficient transmission of small, reliable, ephemeral messages. It functions as foundational infrastructure for real-time signaling and event dissemination, serving as a complement to REST APIs by obviating the necessity for HTTP polling, protracted connections, or intricate webhook configurations.
+qight is a Rust-powered messaging system for environments where the internet can't be trusted. Deploy one relay on any machine — a laptop, a Raspberry Pi — and every device on the local network connects automatically and exchanges messages reliably, even through connection drops and relay restarts.
 
+Built on QUIC for native resilience to packet loss and connection migration. No cloud dependency. No DNS. No polling.
 
-**Current status:** Early working prototype — core HELLO/SEND/FETCH loop functions, but many planned features are still stubs or missing.
+---
 
-## What works today 
+## How it works
 
-- QUIC connection with self-signed cert (localhost testing)
-- `HELLO <id>` handshake
-- `SEND` of arbitrary binary payloads (length-prefixed, `wincode`-serialized envelope)
-- `FETCH <recipient>` returning all stored messages as length-prefixed stream (0 terminator)
-- In-memory storage on the relay (messages persist only until process restart)
-- Basic demo (`qight_demo`) that sends and receives messages
+```
+[ Device A ] ──┐
+[ Device B ] ──┼──► [ qight relay ] (Raspberry Pi / laptop)
+[ Device C ] ──┘         │
+                     SQLite persistence
+                     mDNS discovery
+```
 
-## What is **not** implemented yet
+One relay runs on the network. Clients discover it automatically via mDNS — no hardcoded IPs, no configuration. Messages are persisted to SQLite and delivered when the recipient connects, even if the relay restarted in between.
 
-- Message IDs, timestamps, TTL / expiration
-- Message acknowledgment / deletion after fetch
-- Authentication or client certificate validation
-- Persistent storage
-- Published crate on crates.io
-- 
-## Add to your project
+---
+
+## Deployment
+
+**Step 1 — Run the relay on any machine on the local network:**
+
+```bash
+cargo run --bin relay
+```
+
+The relay announces itself via mDNS. Any device on the same network will find it automatically.
+
+**Step 2 — Add the library to your app:**
 
 ```toml
-# Cargo.toml
 [dependencies]
 qight = { git = "https://github.com/idorocodes/qight.git" }
 ```
 
-### Client 
+**Step 3 — Connect, send, receive:**
 
 ```rust
-
 use anyhow::Result;
-use std::net::SocketAddr;
+use mdns_sd::{ServiceDaemon, ServiceEvent, ScopedIp};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let addr: SocketAddr = "127.0.0.1:4433".parse()?;
+    // Discover relay automatically — no hardcoded IP
+    let (tx, rx) = mpsc::channel::<SocketAddr>();
+    let mdns = ServiceDaemon::new()?;
+    let receiver = mdns.browse("_qight._udp.local.")?;
 
+    std::thread::spawn(move || {
+        while let Ok(event) = receiver.recv() {
+            if let ServiceEvent::ServiceResolved(resolved) = event {
+                if let Some(scoped) = resolved.get_addresses().iter().next() {
+                    let ip: IpAddr = match scoped {
+                        ScopedIp::V4(v4) => IpAddr::V4(*v4.addr()),
+                        ScopedIp::V6(v6) => IpAddr::V6(*v6.addr()),
+                        _ => continue,
+                    };
+                    tx.send(SocketAddr::new(ip, resolved.get_port())).unwrap();
+                }
+            }
+        }
+    });
+
+    let addr = rx.recv()?;
     let client = qight::RelayClient::connect(addr).await?;
+    client.hello("device-001").await?;
 
-    client.hello("test-client-123").await?;
-
+    // Send a message
     let envelope = qight::MessageEnvelope::new(
         "alice".into(),
         "bob".into(),
-        b"idorocodes is sending hello via quic!".to_vec(),
+        b"coordinates: 4.8156, 7.0498".to_vec(),
         3600,
     );
     client.send(&envelope).await?;
 
+    // Fetch messages for this device
     let messages = client.fetch("bob").await?;
-    println!("Fetched {} message(s):", messages.len());
     for msg in messages {
-        println!(
-            "  {} → {} : {:?}",
-            msg.sender,
-            msg.recipient,
-            String::from_utf8_lossy(&msg.payload)
-        );
+        println!("{} → {}: {:?}", msg.sender, msg.recipient, String::from_utf8_lossy(&msg.payload));
     }
 
-    client.close(Some("test complete")).await;
-
+    client.close(None).await;
     Ok(())
 }
-
 ```
 
+---
 
-### Server / relay must be implemented to control the core logic of the system 
-Code is too long so i have a demo here https://github.com/idorocodes/qight/blob/main/src/bin/relay.rs
+## What works today
 
+- QUIC transport with TLS (self-signed cert, auto-generated on first run)
+- Automatic relay discovery via mDNS — zero configuration
+- Persistent message storage via SQLite — survives relay restarts
+- TTL-based message expiration
+- Message delivery confirmation — send blocks until relay confirms storage
+- Store-and-forward — messages queue on relay until recipient connects
 
-## Test 
+## Roadmap
 
-cargo run server 
-cargo run client(in another terminal)
+- [ ] Client-side outbound queue — messages survive relay downtime
+- [ ] Pre-shared key authentication
+- [ ] Clean high-level API (`send_to` / `receive` instead of raw protocol)
+- [ ] ARM cross-compilation — first-class Raspberry Pi support
+- [ ] Published crate on crates.io
 
-for this project, 
+---
 
-its cargo run --bin relay 
-cargo run qight_demo in another terminal
+## Use cases
 
-## Architecture Overview
+- Rescue and disaster response field communications
+- Remote industrial sites with no internet connectivity
+- Rural environments with unreliable or no connectivity
+- Offline-first applications requiring local device coordination
+- Off-chain signaling for blockchain applications
 
-Clients initiate QUIC connections to relay nodes. Messages are enveloped with metadata and dispatched via `SEND`, temporarily queued, and accessed through `FETCH`. The protocol enforces TTL-based expiration for resource efficiency.
+---
 
-## Use Cases
+## Architecture
 
-- Facilitation of real-time service signaling in distributed architectures.
-- Implementation of event-driven notification systems.
-- Support for mobile-oriented push delivery mechanisms resilient to network variability.
-- Enablement of anonymous or decoupled coordination protocols.
-- Off-chain signaling within blockchain ecosystems.
-- Substitution for polling or webhook patterns in microservices environments.
+The relay is a standalone binary. The library is what applications embed. They are separate — the relay handles all persistence and routing, the library handles connection and protocol.
+
+```
+qight (library)   — embed in your app, handles QUIC connection and protocol
+qight-relay (bin) — deploy on field machine, handles storage and message routing
+```
+
+---
 
 ## API Reference
 
-- `RelayClient::connect(addr: &str) -> Result<RelayClient>`: Establishes a QUIC connection.
-- `RelayClient::hello(client_id: &str) -> Result<()>`: Performs protocol initiation.
-- `RelayClient::send(envelope: MessageEnvelope) -> Result<()>`: Submits a message.
-- `RelayClient::fetch(recipient: &str) -> Result<Vec<MessageEnvelope>>`: Retrieves pending messages.
-- `MessageEnvelope`: Struct with fields as per the protocol envelope.
+- `RelayClient::connect(addr: SocketAddr) -> Result<RelayClient>` — establish QUIC connection to relay
+- `RelayClient::hello(client_id: &str) -> Result<()>` — register with relay
+- `RelayClient::send(envelope: &MessageEnvelope) -> Result<()>` — send message, blocks until relay confirms storage
+- `RelayClient::fetch(recipient: &str) -> Result<Vec<MessageEnvelope>>` — retrieve and delete all pending messages
+- `RelayClient::close(reason: Option<&str>)` — close connection
+- `MessageEnvelope::new(sender, recipient, payload, ttl)` — construct a message
 
-Consult the crate documentation for exhaustive details.
-
-## Built With Rust Drawing inspiration from Solana's QUIC applications and contemporary blockchain infrastructures.
-
-
-## Contributing
-
-Contributions are encouraged. Kindly submit issues or pull requests to initiate discussions on enhancements, bug resolutions, or feature additions.
+---
 
 ## License
 
-Distributed under the MIT License.
-
-## Author
-
-Authored by [@idorocodes]
+MIT — [@idorocodes](https://github.com/idorocodes)

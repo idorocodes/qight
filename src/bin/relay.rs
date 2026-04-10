@@ -310,7 +310,7 @@ for msg in messages {
     send.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
     send.write_all(&bytes).await?;
 }
-send.write_all(&0u32.to_be_bytes()).await?;
+send.write_all(&0u32.to_be_bytes()).await:?
 
     // let messages = {
     //     let store = storage.lock().unwrap();
@@ -326,7 +326,6 @@ send.write_all(&0u32.to_be_bytes()).await?;
     //     send.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
     //     send.write_all(&bytes).await?;
     // }
-
     
     Ok(())
 }

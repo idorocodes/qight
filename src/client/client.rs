@@ -56,7 +56,7 @@ impl RelayClient {
             .await
             .context("failed to open bidirectional stream")?;
 
-        let payload = format!("HELLO\n{}", client_id);
+        let payload = format!("HELLO {}\n", client_id);
         send.write_all(payload.as_bytes()).await?;
         send.finish()?;
 

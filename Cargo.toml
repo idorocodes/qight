@@ -23,6 +23,8 @@ webpki-roots = "0.26"
 rcgen = "0.14.6"
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
+mdns-sd = "0.19.0"
+
 
 [lib]
 name = "qight"

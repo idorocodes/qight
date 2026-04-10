@@ -1,25 +1,60 @@
 use anyhow::{Context, Result};
+use mdns_sd::{ServiceDaemon, ServiceInfo};
 use qight::MessageEnvelope;
 use quinn::{Endpoint, ServerConfig};
 use quinn_proto::crypto::rustls::QuicServerConfig;
-use r2d2::{Pool, PooledConnection};
+use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rcgen::generate_simple_self_signed;
-use rusqlite::params;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::ServerConfig as RustlsServerConfig;
 use std::fs::{read, write};
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{UNIX_EPOCH,SystemTime};
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Relay Started! Listening! ");
     let addr: SocketAddr = "127.0.0.1:4433".parse()?;
 
-    // Generate self-signed certificate for local testing
+    let mdns = ServiceDaemon::new().expect("Failed to create daemon");
+
+    let receiver = mdns.monitor().expect("Failed to monitor daemon");
+
+    std::thread::spawn(move || {
+    while let Ok(event) = receiver.recv() {
+        match event {
+            mdns_sd::DaemonEvent::Error(error) => {
+                eprintln!("Daemon error: {error}");
+            }
+            _ => {}
+        }
+    }
+});
+
+let service_type =  "_qight._udp.local.";
+let instance_name = "my_instance";
+let ip = "127.0.0.1";
+let host_name = "127.0.0.1:4433.local.";
+let port = 4433;
+let properties = [("property_1", "test"), ("property_2", "1234")];
+
+let my_service = ServiceInfo::new(
+    service_type,
+    instance_name,
+    host_name,
+    ip,
+    port,
+    &properties[..],
+).unwrap();
+
+// Register with the daemon, which publishes the service.
+mdns.register(my_service).expect("Failed to register our service");
+
+
+
+
     let _subject_alt_names: Vec<_> = vec!["localhost"];
 
     let cert_path = "server_cert";
@@ -191,7 +226,7 @@ async fn handle_stream(
                     }
                 }
 
-                // Drain anything after the \n (safety)
+               
                 if pos + 1 < command_buf.len() {
                     // leftover garbage — log & ignore
                     println!(
@@ -210,7 +245,7 @@ async fn handle_stream(
 
 async fn handle_hello(client_id: &str, send: &mut quinn::SendStream) -> Result<()> {
     println!("HELLO received from client: {}", client_id);
-    let welcome = format!("Welcome, {}!\n", client_id);
+    let welcome = format!("Welcome, {}", client_id);
     send.write_all(welcome.as_bytes()).await?;
     Ok(())
 }
@@ -294,9 +329,9 @@ async fn handle_fetch(
             payload: row.get(5)?,
         })
     })?.filter_map(|r| r.ok()).collect();
-println!("Fetched {} messages to deliver", msgs.len());
+
       for msg in &msgs {
-            println!("Deleting msg_id: {}", msg.msg_id);
+
 
         conn.execute("DELETE FROM messages WHERE msg_id = ?1", [&msg.msg_id])?;
     }
@@ -310,7 +345,7 @@ for msg in messages {
     send.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
     send.write_all(&bytes).await?;
 }
-send.write_all(&0u32.to_be_bytes()).await:?
+send.write_all(&0u32.to_be_bytes()).await?;
 
     // let messages = {
     //     let store = storage.lock().unwrap();

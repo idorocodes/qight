@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
                         let ip: IpAddr = match scoped {
                             ScopedIp::V4(v4) => IpAddr::V4(*v4.addr()),
                             ScopedIp::V6(v6) => IpAddr::V6(*v6.addr()),
-                             &_ => todo!(),
+                             _ => continue,
                         };
                         let addr = SocketAddr::new(ip, resolved.get_port());
                         tx.send(addr).unwrap();

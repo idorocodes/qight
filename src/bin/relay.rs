@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use ed25519_dalek::SIGNATURE_LENGTH;
 use hex;
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use qight::MessageEnvelope;
@@ -277,6 +278,12 @@ async fn handle_send(
 
     let envelope: MessageEnvelope =
         wincode::deserialize(&payload).context("failed to deserialize MessageEnvelope")?;
+    
+    if !envelope.verify() {
+        send.write_all(b"ERROR: Invalid signature\n").await?;
+        return Ok(());
+    }
+    
     println!("Stored message for recipient: {:?}", hex::encode(envelope.recipient));
     let envelope_clone = envelope.clone();
 
@@ -332,6 +339,7 @@ async fn handle_fetch(
             timestamp: row.get(4)?,
             ttl: row.get(5)?,
             payload: row.get(6)?,
+            signature: [0u8; SIGNATURE_LENGTH],
         })
     })?.filter_map(|r| r.ok()).collect();
 

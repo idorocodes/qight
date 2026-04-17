@@ -243,11 +243,6 @@ Includes unit tests for signing, serialization, DB ops, and integration tests.
 4. Run `cargo fmt` and `cargo clippy`.
 5. Submit a PR.
 
-### Planned Features
-- Payload encryption.
-- WebSocket fallback.
-- REST API.
-- Clustering for scalability.
 
 ## License
 

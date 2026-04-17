@@ -1,5 +1,5 @@
 use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SigningKey,
+    PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SigningKey, Signer, Verifier, Signature, VerifyingKey, SIGNATURE_LENGTH,
 };
 use rand::rngs::OsRng;
 
@@ -19,17 +19,22 @@ pub fn gen_keypair() -> ([u8;PUBLIC_KEY_LENGTH] , [u8;SECRET_KEY_LENGTH]){
     return (public_key,private_key);
 
 }
-pub fn sign_message(){
-    todo!()
+pub fn sign_message(private_key: &[u8; SECRET_KEY_LENGTH], message: &[u8]) -> [u8; SIGNATURE_LENGTH] {
+    let sk = SigningKey::from_bytes(private_key);
+    let sig = sk.sign(message);
+    sig.to_bytes()
 }
 
-pub fn verify_message() {
-    todo!()
+pub fn verify_message(public_key: &[u8; PUBLIC_KEY_LENGTH], message: &[u8], signature: &[u8; SIGNATURE_LENGTH]) -> bool {
+    if let Ok(pk) = VerifyingKey::from_bytes(public_key) {
+        let sig = ed25519_dalek::Signature::from_bytes(signature);
+        pk.verify(message, &sig).is_ok()
+    } else {
+        false
+    }
 }
 
-pub fn custom_key() {
-    todo!()
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -50,6 +55,4 @@ mod tests {
         assert_eq!(pub1.len(), PUBLIC_KEY_LENGTH);
         assert_eq!(priv1.len(), SECRET_KEY_LENGTH);
     }
-
-    // TODO: Add tests for sign_message and verify_message once implemented
 }

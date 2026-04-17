@@ -1,5 +1,5 @@
-use crate::{errors::QightError,keys_auth::key_fn::gen_key};
-use ed25519_dalek::PUBLIC_KEY_LENGTH;
+use crate::{errors::QightError,keys_auth::key_fn::{gen_key, sign_message, verify_message}};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, SECRET_KEY_LENGTH};
 use wincode::{SchemaRead, SchemaWrite};
 
 #[repr(C)]
@@ -12,6 +12,7 @@ pub struct MessageEnvelope {
     pub timestamp: u64,
     pub ttl: u32,
     pub payload: Vec<u8>,
+    pub signature: [u8; SIGNATURE_LENGTH],
 }
 
 
@@ -35,8 +36,17 @@ impl MessageEnvelope {
             payload,
             timestamp: chrono::Utc::now().timestamp() as u64,
             ttl,
+            signature: [0u8; SIGNATURE_LENGTH],
         };
         message_object
+    }
+
+    pub fn sign(&mut self, private_key: &[u8; SECRET_KEY_LENGTH]) {
+        self.signature = sign_message(private_key, &self.payload);
+    }
+
+    pub fn verify(&self) -> bool {
+        verify_message(&self.sender_key, &self.payload, &self.signature)
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, anyhow::Error> {
@@ -53,11 +63,7 @@ impl MessageEnvelope {
 
     pub fn is_expired(&self, current_time: u64) -> bool {
         let message_time = self.timestamp;
-        if message_time > current_time + self.ttl as u64 {
-            false
-        } else {
-            true
-        }
+        current_time > message_time + self.ttl as u64
     }
 
     pub fn display(&self) -> &MessageEnvelope{

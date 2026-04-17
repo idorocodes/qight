@@ -42,15 +42,16 @@ let addr = tokio::time::timeout(
     client.hello("test-client-123").await?;
 
     let (recipient_key, _) = gen_keypair();
-    let (sender_key, _) = gen_keypair();
+    let (sender_pub, sender_priv) = gen_keypair();
 
-    let envelope = qight::MessageEnvelope::new(
+    let mut envelope = qight::MessageEnvelope::new(
         "alice".into(),
         recipient_key,
-        sender_key,
-        b"idorocodes is saying hello!".to_vec(),
+        sender_pub,
+        b"idorocodes is saying hell!".to_vec(),
         3600,
     );
+    envelope.sign(&sender_priv);
     client.send(&envelope).await?;
 
     let messages = client.fetch(&hex::encode(recipient_key)).await?;

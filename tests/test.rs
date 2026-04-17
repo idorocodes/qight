@@ -7,15 +7,16 @@ mod tests {
 
     #[test]
     fn test_envelope_creation() {
-        let client = Uuid::new_v4().to_string();
+        let (recipient_key, _) = qight::gen_keypair();
+        let (sender_key, _) = qight::gen_keypair();
         let sender_id = Uuid::new_v4().to_string();
 
         let envelope =
-            MessageEnvelope::new(sender_id, client, BASE64.encode("sample").into_bytes(), 10);
+            MessageEnvelope::new(sender_id, recipient_key, sender_key, BASE64.encode("sample").into_bytes(), 10);
         let converted_bytes = envelope.to_bytes().unwrap();
 
         println!("{:?}", converted_bytes);
-        let deserialized_envelope = envelope.from_bytes(converted_bytes.as_slice()).unwrap();
+        let deserialized_envelope = MessageEnvelope::from_bytes(converted_bytes.as_slice()).unwrap();
         assert_eq!(envelope.msg_id, deserialized_envelope.msg_id);
         assert_eq!(envelope.payload, deserialized_envelope.payload);
         assert_eq!(envelope.sender, deserialized_envelope.sender);
@@ -23,3 +24,5 @@ mod tests {
         println!("{:?}", deserialized_envelope)
     }
 }
+
+

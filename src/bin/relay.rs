@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use hex;
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use qight::MessageEnvelope;
 use quinn::{Endpoint, ServerConfig};
@@ -115,17 +116,18 @@ mdns.register(my_service).expect("Failed to register our service");
     // 3. Get a connection from the pool
     let storage = pool.get()?;
 
-    storage.execute(
-        "CREATE TABLE IF NOT EXISTS  messages (
-    msg_id    TEXT PRIMARY KEY,
-    sender    TEXT NOT NULL,
-    recipient TEXT NOT NULL,
-    timestamp INTEGER NOT NULL,
-    ttl       INTEGER NOT NULL,
-    payload   BLOB NOT NULL )",
-        (),
-    )?;
-
+   storage.execute(
+    "CREATE TABLE IF NOT EXISTS messages (
+        msg_id      BLOB PRIMARY KEY,  
+        sender      TEXT NOT NULL,
+        sender_key  BLOB NOT NULL,    
+        recipient   BLOB NOT NULL,    
+        timestamp   INTEGER NOT NULL,
+        ttl         INTEGER NOT NULL,
+        payload     BLOB NOT NULL
+    )",
+    (),
+)?;
     storage.execute_batch("CREATE INDEX IF NOT EXISTS idx_recipient ON messages(recipient)")?;
     let endpoint =
         Endpoint::server(server_config, addr).context("failed to create QUIC endpoint")?;
@@ -244,8 +246,8 @@ async fn handle_stream(
 }
 
 async fn handle_hello(client_id: &str, send: &mut quinn::SendStream) -> Result<()> {
-    println!("HELLO received from client: {}", client_id);
-    let welcome = format!("Welcome, {}", client_id);
+    println!("HELLO received from client: {:?}", client_id);
+    let welcome = format!("Welcome, {:?}", client_id);
     send.write_all(welcome.as_bytes()).await?;
     Ok(())
 }
@@ -262,7 +264,7 @@ async fn handle_send(
 
     let len = u32::from_be_bytes(len_bytes) as usize;
 
-    if len > 10_000_000 {
+    if len > 10_000_000_ {
         anyhow::bail!("payload too large: {} bytes", len);
     }
 
@@ -275,16 +277,18 @@ async fn handle_send(
 
     let envelope: MessageEnvelope =
         wincode::deserialize(&payload).context("failed to deserialize MessageEnvelope")?;
-    println!("Stored message for recipient: {}", envelope.recipient);
+    println!("Stored message for recipient: {:?}", hex::encode(envelope.recipient));
     let envelope_clone = envelope.clone();
+
     tokio::task::spawn_blocking(move || {
         let conn = connection.clone().get()?;
         conn.execute(
-            "INSERT INTO messages (msg_id,sender,recipient,timestamp,ttl,payload)
-         VALUES (?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO messages (msg_id,sender,sender_key,recipient,timestamp,ttl,payload)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)",
             (
                 &envelope_clone.msg_id,
                 &envelope_clone.sender,
+                &envelope_clone.sender_key, 
                 &envelope_clone.recipient,
                 &envelope_clone.timestamp,
                 &envelope_clone.ttl,
@@ -306,27 +310,28 @@ async fn handle_fetch(
 ) -> Result<()> {
     println!("FETCH request received for recipient: {}", recipient);
 
+    let recipient_bytes = hex::decode(recipient).context("invalid hex recipient")?;
 
     let now = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .expect("Time went backwards")
     .as_secs();
 
-    let recipient = recipient.to_string();
    let messages = tokio::task::spawn_blocking( move || {
          let conn = connection.clone().get()?;
          conn.execute("DELETE FROM messages WHERE timestamp + ttl < (?1)", (now,))?;
 
-       let mut messages = conn.prepare("SELECT msg_id, sender, recipient, timestamp, ttl, payload FROM messages WHERE recipient = ?1")?;
+       let mut messages = conn.prepare("SELECT msg_id, sender, sender_key, recipient, timestamp, ttl, payload FROM messages WHERE recipient = ?1")?;
 
-          let msgs: Vec<MessageEnvelope> = messages.query_map([&recipient], |row| {
+          let msgs: Vec<MessageEnvelope> = messages.query_map([&recipient_bytes], |row| {
         Ok(MessageEnvelope {
             msg_id: row.get(0)?,
             sender: row.get(1)?,
-            recipient: row.get(2)?,
-            timestamp: row.get(3)?,
-            ttl: row.get(4)?,
-            payload: row.get(5)?,
+            sender_key:row.get(2)?,
+            recipient: row.get(3)?,
+            timestamp: row.get(4)?,
+            ttl: row.get(5)?,
+            payload: row.get(6)?,
         })
     })?.filter_map(|r| r.ok()).collect();
 
@@ -363,4 +368,63 @@ send.write_all(&0u32.to_be_bytes()).await?;
     // }
     
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use r2d2::Pool;
+    use r2d2_sqlite::SqliteConnectionManager;
+
+    fn setup_test_db() -> Pool<SqliteConnectionManager> {
+        let manager = SqliteConnectionManager::file(":memory:");
+        let pool = Pool::builder().build(manager).unwrap();
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS messages (
+                msg_id BLOB PRIMARY KEY,
+                sender TEXT NOT NULL,
+                sender_key BLOB NOT NULL,
+                recipient BLOB NOT NULL,
+                timestamp INTEGER NOT NULL,
+                ttl INTEGER NOT NULL,
+                payload BLOB NOT NULL
+            )",
+            (),
+        ).unwrap();
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_recipient ON messages(recipient)", ()).unwrap();
+        pool
+    }
+
+    #[test]
+    fn test_db_insert_and_query() {
+        let pool = setup_test_db();
+        let conn = pool.get().unwrap();
+
+        let envelope = MessageEnvelope::new(
+            "test_sender".to_string(),
+            [0u8; 32],
+            [1u8; 32],
+            b"payload".to_vec(),
+            3600,
+        );
+
+        conn.execute(
+            "INSERT INTO messages (msg_id, sender, sender_key, recipient, timestamp, ttl, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (
+                &envelope.msg_id,
+                &envelope.sender,
+                &envelope.sender_key,
+                &envelope.recipient,
+                &envelope.timestamp,
+                &envelope.ttl,
+                &envelope.payload,
+            ),
+        ).unwrap();
+
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
 }

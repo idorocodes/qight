@@ -35,7 +35,7 @@
 ### Add to Your Project
 ```toml
 [dependencies]
-qight = { git = "https://github.com/idorocodes/qight.git", branch = "outbound-queue" }
+qight = { git = "https://github.com/idorocodes/qight.git"}
 ```
 
 ### Build from Source

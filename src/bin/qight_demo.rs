@@ -48,7 +48,7 @@ let addr = tokio::time::timeout(
         "alice".into(),
         recipient_key,
         sender_pub,
-        b"idorocodes is saying hell!".to_vec(),
+        b"idorocodes is saying hello!".to_vec(),
         3600,
     );
     envelope.sign(&sender_priv);

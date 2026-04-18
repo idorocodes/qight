@@ -81,7 +81,7 @@ impl RelayClient {
             outbox,
         };
         if client.connection.is_some() {
-            println!("Draining queue!");
+          
             let _ = client.drain_queue().await;
         }
         Ok(client)
@@ -109,7 +109,6 @@ impl RelayClient {
         let bytes = envelope.to_bytes()?;
         let pool = self.outbox.clone();
         let envelope_clone = envelope.clone();
-        println!("sending message : {:?}",envelope_clone);
         tokio::task::spawn_blocking(move || {
             let conn = pool.get()?;
             conn.execute(
@@ -213,7 +212,7 @@ impl RelayClient {
                 for msg in rows {
                     msgs.push(msg?);
                 }
-                println!("darining queue messag len : {}", msgs.len());
+             
                 Ok(msgs)
             }
         })

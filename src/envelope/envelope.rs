@@ -121,4 +121,28 @@ mod tests {
         let invalid_bytes = b"not an envelope";
         assert!(MessageEnvelope::from_bytes(invalid_bytes).is_err());
     }
-}
+
+     
+ 
+    
+        #[test]
+        fn test_envelope_signature_verification() {
+            let (recipient_key, _) = gen_keypair();
+            let (sender_key, sender_priv) = gen_keypair();
+    
+            let mut envelope = MessageEnvelope::new(
+                "test_sender".to_string(),
+                recipient_key,
+                sender_key,
+                b"test payload".to_vec(),
+                3600,
+            );
+    
+            envelope.sign(&sender_priv);
+            assert!(envelope.verify());
+    
+            let mut tampered = envelope.clone();
+            tampered.payload = b"tampered payload".to_vec();
+            assert!(!tampered.verify());
+        }
+    }

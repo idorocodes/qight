@@ -1,5 +1,5 @@
 use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SigningKey, Signer, Verifier, Signature, VerifyingKey, SIGNATURE_LENGTH,
+    PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SigningKey, Signer, Verifier, VerifyingKey, SIGNATURE_LENGTH,
 };
 use rand::rngs::OsRng;
 

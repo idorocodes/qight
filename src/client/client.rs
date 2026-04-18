@@ -13,6 +13,7 @@ use std::usize;
 
 use crate::MessageEnvelope;
 
+#[derive(Clone)]
 pub struct RelayClient {
     connection: Option<quinn::Connection>,
     outbox: Pool<SqliteConnectionManager>,

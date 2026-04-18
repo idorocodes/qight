@@ -220,7 +220,6 @@ graph TB
 
 - **Transport Security**: QUIC with TLS 1.3 (self-signed certs for testing).
 - **Message Authenticity**: Ed25519 signatures prevent tampering.
-- **No Encryption**: Payloads are signed but not encrypted—add AES for confidentiality.
 - **Key Management**: Clients handle keys; relay doesn't store them.
 - **Denial of Service**: Basic rate limiting recommended for production.
 
